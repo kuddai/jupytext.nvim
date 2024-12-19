@@ -11,6 +11,11 @@ The plugin enables editing [Jupyter notebook `.ipynb` files](https://jupyter.org
 
 It is a rewrite for Neovim of the [`jupytext.vim` plugin](https://github.com/goerz/jupytext.vim). See [History](#history) for changes relative to the original vimscript version.
 
+<!-- panvimdoc-ignore-start -->
+
+![jupytext.nvim screenshot](https://github.com/user-attachments/assets/70bce5c1-3f10-477c-b948-6f0f05bc8494)
+
+<!-- panvimdoc-ignore-end -->
 
 Prerequisites
 =============
