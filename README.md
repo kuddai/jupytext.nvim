@@ -34,6 +34,7 @@ Use the following plugin specification:
 ```lua
 {
     'goerz/jupytext.nvim',
+    version = '0.1',
     opts = {},  -- see Options
 }
 ```
@@ -150,7 +151,7 @@ This plugin uses the [`plenary.nvim` test framework](https://github.com/nvim-lua
 History
 =======
 
-### v.0.1.0-dev (unreleased)
+### v0.1.0 (2024-12-18)
 
 Initial release; Rewrite of [`jupytext.vim`](https://github.com/goerz/jupytext.vim). The new plugin targets Neovim and has been rewritten in Lua to avoid restrictions of the old plugin:
 
