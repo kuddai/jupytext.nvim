@@ -11,8 +11,20 @@ function M.get_filetype(ipynb_file, format, metadata)
   elseif format:sub(1, 3) == 'Rmd' then
     return 'markdown'
   else
-    return metadata.kernelspec.language
+    if metadata and metadata.kernelspec then
+      return metadata.kernelspec.language
+    else
+      return ''
+    end
   end
+end
+
+-- Absolute path the the default .ipynb file to use as a template "new" files
+function M.default_new_template()
+  local script_path = debug.getinfo(1, 'S').source:sub(2)
+  local script_dir = vim.fn.fnamemodify(script_path, ':h')
+  local data_dir = vim.uv.fs_realpath(script_dir .. '/../data')
+  return vim.uv.fs_realpath(data_dir .. '/template.ipynb')
 end
 
 -- Plugin options
@@ -21,6 +33,7 @@ M.opts = {
   format = 'markdown',
   update = true,
   filetype = M.get_filetype,
+  new_template = M.default_new_template(),
   sync_patterns = { '*.md', '*.py', '*.jl', '*.R', '*.Rmd', '*.qmd' },
   autosync = true,
   async_write = true, -- undocumented (for testing)
@@ -42,7 +55,13 @@ M.setup = function(opts)
       local ipynb_file = args.file -- may be relative path
       local bufnr = args.buf
       local metadata = M.open_notebook(ipynb_file, bufnr)
-      vim.b.mtime = vim.uv.fs_stat(ipynb_file).mtime
+      local stat = vim.uv.fs_stat(ipynb_file)
+      if stat then
+        vim.b.mtime = stat.mtime
+      else
+        -- we're not dealing with an actual local file
+        vim.b.jupytext_autosync = false
+      end
       -- Local autocommands to handle two-way sync
       local buf_augroup = 'JupytextPlugin' .. bufnr
       vim.api.nvim_create_augroup(buf_augroup, { clear = true })
@@ -63,7 +82,7 @@ M.setup = function(opts)
         end,
       })
 
-      if M.get_option('autosync') and M.is_paired(metadata) then
+      if stat and M.get_option('autosync') and M.is_paired(metadata) then
         vim.api.nvim_buf_set_option(bufnr, 'autoread', true)
         -- We need autoread to be true, because every save will trigger an
         -- update event from the `.ipynb` file being rewritten in the
@@ -137,27 +156,37 @@ function M.schedule(async, f)
   end
 end
 
--- Load ipynb file into the buffer via jupytext conversion
+-- Load ipynb file into the buffer via jupytext conversion.
+-- The `ipynb_file` may be a relative path to an existing local file or some URL
+-- scheme. Both of these are read via `M.read_file`. It may also be a realative
+-- path to a new file.
 function M.open_notebook(ipynb_file, bufnr)
-  local source_file = vim.fn.fnamemodify(ipynb_file, ':p') -- absolute path
+  local source_file = vim.uv.fs_realpath(ipynb_file) -- absolute path if exists, or `nil`
+  local is_url = ipynb_file:find('^.+://')
+  local is_new_file = not source_file and not is_url
   bufnr = bufnr or 0 -- current buffer, by default
   print('Loading via jupytext…')
-  local metadata = M.get_metadata(source_file)
   local autosync = M.get_option('autosync')
-  if autosync and M.is_paired(metadata) then
+  if source_file and autosync then
     M.sync(source_file)
   end
+  local json_lines = {}
+  if is_new_file then
+    json_lines = M.read_file(M.get_option('new_template'), true)
+  else
+    json_lines = M.read_file(ipynb_file, true)
+  end
+  local metadata = M.get_metadata(json_lines)
   local format = M.get_option('format')
   local jupytext = M.get_option('jupytext')
   if type(format) == 'function' then
     format = format(source_file, metadata)
   end
   if format == 'ipynb' then
-    local lines = M.read_file(ipynb_file, true)
-    vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, lines)
+    vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, json_lines)
   else
-    local cmd = { jupytext, '--from', 'ipynb', '--to', format, '--output', '-', source_file }
-    local proc = vim.system(cmd, { text = true }):wait()
+    local cmd = { jupytext, '--from', 'ipynb', '--to', format, '--output', '-' }
+    local proc = vim.system(cmd, { text = true, stdin = json_lines }):wait()
     if proc.code == 0 then
       local text = proc.stdout:gsub('\n$', '') -- strip trailing newline
       vim.api.nvim_buf_set_lines(bufnr, -2, -1, false, vim.split(text, '\n'))
@@ -207,7 +236,7 @@ function M.write_notebook(ipynb_file, metadata, bufnr)
   local buf_mtime = vim.b.mtime
   local stat = vim.uv.fs_stat(ipynb_file)
   if write_in_place then
-    if stat and stat.mtime.sec ~= buf_mtime.sec then
+    if stat and buf_mtime and (stat.mtime.sec ~= buf_mtime.sec) then
       vim.notify('WARNING: The file has been changed since reading it!!!', vim.log.levels.WARN)
       vim.notify('Do you really want to write to it (y/n)? ', vim.log.levels.INFO)
       local input = vim.fn.getchar()
@@ -309,25 +338,20 @@ function M._file_exists(path)
   return stat and stat.type == 'file'
 end
 
--- Read the metadata from the given ipynb file
-function M.get_metadata(ipynb_file)
-  local success, metadata = pcall(function()
-    local cmd = { 'jq', '--compact-output', '--monochrome-output', '.metadata', ipynb_file }
-    local proc = vim.system(cmd, { text = true }):wait()
-    if proc.code == 0 then
-      return vim.json.decode(proc.stdout)
-    else
-      error('Command exited with non-zero code: ' .. proc.code)
-    end
-  end)
-  if not success then
-    metadata = M.get_json(ipynb_file).metadata
+-- Read the metadata from the given lines of json data. Return nil if there is
+-- no metadata
+function M.get_metadata(json_lines)
+  local json_str = table.concat(json_lines, '\n')
+  local json_data = {}
+  if #json_str > 0 then
+    json_data = vim.json.decode(json_str)
   end
-  return metadata
+  return json_data.metadata
 end
 
 -- Get the content of the file as a multiline string or an array of lines
 function M.read_file(file, as_lines)
+  -- TODO: if file is URL, e.g. 'fugitive://', delegate to other readers
   if as_lines then
     local lines = {}
     for line in io.lines(file) do
@@ -345,7 +369,7 @@ function M.read_file(file, as_lines)
   end
 end
 
--- Get the json in the file as a Lua table
+-- Get the json in the file as a Lua table (for debugging)
 function M.get_json(ipynb_file)
   local content = M.read_file(ipynb_file)
   return vim.json.decode(content)
@@ -354,10 +378,10 @@ end
 -- Does metadata indicate that underlying notebook is paired?
 -- In non-boolean context, get the paired formats spec
 function M.is_paired(metadata)
-  if metadata.jupytext then
+  if metadata and metadata.jupytext then
     return metadata.jupytext.formats
   end
-  return false
+  return nil
 end
 
 function M.get_yaml_lines(lines)

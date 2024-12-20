@@ -1,4 +1,6 @@
 local util = require('tests.test_util')
+local get_metadata = require('jupytext').get_metadata
+local read_file = require('jupytext').read_file
 
 describe('an unpaired .ipynb file', function()
   local notebooks = util.notebooks()
@@ -6,7 +8,7 @@ describe('an unpaired .ipynb file', function()
   local ipynb_file = notebooks .. 'unpaired.ipynb'
 
   it('does not have jupytext metadata', function()
-    local metadata = require('jupytext').get_metadata(ipynb_file)
+    local metadata = get_metadata(read_file(ipynb_file, true))
     assert.is_nil(metadata.jupytext)
   end)
 
