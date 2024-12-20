@@ -22,8 +22,6 @@ Prerequisites
 
 The [`jupytext` command line utility](https://github.com/mwouts/jupytext) must be installed.
 
-It is recommended to also have [`jq`](https://jqlang.github.io/jq/) installed. This is used to obtain the metadata from the `.ipynb` file without having to fully load it into Neovim's memory.
-
 After following the [installation](#installation) instructions, the `:checkhealth jupytext` command can be used inside Neovim to verify the prerequisites.
 
 
@@ -60,9 +58,9 @@ opts = {
   format = "markdown",
   update = true,
   filetype = require("jupytext").get_filetype,
+  new_template = require("jupytext").default_new_template(),
   sync_patterns = { '*.md', '*.py', '*.jl', '*.R', '*.Rmd', '*.qmd' },
   autosync = true,
-  async_write = true,
 }
 ```
 
@@ -98,6 +96,11 @@ The buffer `filetype` setting to use after loading the file, which determines sy
 - `metadata`: a table with metadata information from the original JSON data in the `.ipynb` file. This should contain, e.g., the notebook language in `metadata.kernelspec.language`
 
 The default function used for this setting uses `"markdown"` for markdown formats, and the value of `metadata.kernelspec.language` otherwise. Like the previous options, `b:jupytext_filetype` is available to temporarily override the choice of filetype.
+
+#### `new_template`
+
+When editing a new (non-existing) `.ipynb` file, a `template.ipynb` file to load into the buffer. The default built-in template is for a Python notebook. While it is possible to manually edit the YAML header to change the kernel and/or language, if you primarily work with non-Python notebooks, it might be useful to set a custom template.
+
 
 #### `sync_pattern`
 
@@ -155,6 +158,10 @@ This plugin uses the [`plenary.nvim` test framework](https://github.com/nvim-lua
 
 History
 =======
+
+### Unreleased
+
+* Added: ability to create new `.ipynb` files. These are created from a template file that can be configured via the `new_template` option.
 
 ### v0.1.0 (2024-12-18)
 
