@@ -49,10 +49,16 @@ M.setup = function(opts)
   vim.api.nvim_create_autocmd('BufReadCmd', {
 
     pattern = '*.ipynb',
+    desc = 'Convert .ipynb file through jupytext on reading',
     group = augroup,
 
     callback = function(args)
       local ipynb_file = args.file -- may be relative path
+      if ipynb_file:find('^.+://') then
+        -- Bail out for URL-type files (like 'fugitive://', 'oil-ssh://')
+        vim.cmd('edit ' .. vim.fn.fnameescape(ipynb_file))
+        return
+      end
       local bufnr = args.buf
       local metadata = M.open_notebook(ipynb_file, bufnr)
       local stat = vim.uv.fs_stat(ipynb_file)
@@ -68,6 +74,7 @@ M.setup = function(opts)
 
       vim.api.nvim_create_autocmd('BufWriteCmd', {
         buffer = bufnr,
+        desc = 'Convert to native .ipynb json format through jupytext on writing',
         group = buf_augroup,
         callback = function(bufargs)
           local format = M.get_option('format')
@@ -89,6 +96,7 @@ M.setup = function(opts)
         -- background.
         vim.api.nvim_create_autocmd('CursorHold', {
           buffer = bufnr,
+          desc = 'Periodically check if Jupytext has updated paired files in the background',
           group = buf_augroup,
           callback = function()
             vim.api.nvim_command('checktime')
@@ -102,6 +110,7 @@ M.setup = function(opts)
   if M.get_option('autosync') and (#M.opts.sync_patterns > 0) then
     vim.api.nvim_create_autocmd('CursorHold', {
       pattern = M.opts.sync_patterns,
+      desc = 'Periodically check if Jupytext has updated paired files in the background',
       group = augroup,
       callback = function()
         vim.api.nvim_command('checktime')
@@ -111,6 +120,7 @@ M.setup = function(opts)
     vim.api.nvim_create_autocmd('BufReadPre', {
 
       pattern = M.opts.sync_patterns,
+      desc = 'Make sure paired Jupytext files are synced before reading',
       group = augroup,
 
       callback = function(args)
@@ -125,6 +135,7 @@ M.setup = function(opts)
     vim.api.nvim_create_autocmd('BufWritePost', {
 
       pattern = M.opts.sync_patterns,
+      desc = 'Make sure paired Jupytext files are synced after writing',
       group = augroup,
 
       callback = function(args)
@@ -157,13 +168,9 @@ function M.schedule(async, f)
 end
 
 -- Load ipynb file into the buffer via jupytext conversion.
--- The `ipynb_file` may be a relative path to an existing local file or some URL
--- scheme. Both of these are read via `M.read_file`. It may also be a realative
--- path to a new file.
+-- The `ipynb_file` can be an existing file or a new file, but it must be a valid local path
 function M.open_notebook(ipynb_file, bufnr)
   local source_file = vim.uv.fs_realpath(ipynb_file) -- absolute path if exists, or `nil`
-  local is_url = ipynb_file:find('^.+://')
-  local is_new_file = not source_file and not is_url
   bufnr = bufnr or 0 -- current buffer, by default
   print('Loading via jupytext…')
   local autosync = M.get_option('autosync')
@@ -171,10 +178,15 @@ function M.open_notebook(ipynb_file, bufnr)
     M.sync(source_file)
   end
   local json_lines = {}
-  if is_new_file then
+  if source_file == nil then
     json_lines = M.read_file(M.get_option('new_template'), true)
   else
-    json_lines = M.read_file(ipynb_file, true)
+    local success, _json_lines = pcall(function()
+      return M.read_file(ipynb_file, true)
+    end)
+    if success then
+      json_lines = _json_lines
+    end
   end
   local metadata = M.get_metadata(json_lines)
   local format = M.get_option('format')
@@ -351,7 +363,6 @@ end
 
 -- Get the content of the file as a multiline string or an array of lines
 function M.read_file(file, as_lines)
-  -- TODO: if file is URL, e.g. 'fugitive://', delegate to other readers
   if as_lines then
     local lines = {}
     for line in io.lines(file) do
