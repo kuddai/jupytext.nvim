@@ -36,16 +36,21 @@ M.opts = {
   new_template = M.default_new_template(),
   sync_patterns = { '*.md', '*.py', '*.jl', '*.R', '*.Rmd', '*.qmd' },
   autosync = true,
+  handle_url_schemes = true,
   async_write = true, -- undocumented (for testing)
 }
 
 M.setup = function(opts)
   for key, value in pairs(opts) do
+    if not M.opts[key] then
+      vim.notify('Invalid option for jupytext.nvim: ' .. key, vim.log.levels.ERROR)
+    end
     M.opts[key] = value
   end
 
   local augroup = vim.api.nvim_create_augroup('JupytextPlugin', { clear = true })
 
+  -- read/write local .ipynb files
   vim.api.nvim_create_autocmd('BufReadCmd', {
 
     pattern = '*.ipynb',
@@ -56,9 +61,11 @@ M.setup = function(opts)
       local ipynb_file = args.file -- may be relative path
       if ipynb_file:find('^.+://') then
         -- Bail out for URL-type files (like 'fugitive://', 'oil-ssh://')
+        -- This is handled by the `BufReadPost` autocmd instead
         vim.cmd('edit ' .. vim.fn.fnameescape(ipynb_file))
         return
       end
+      vim.cmd.doautocmd({ args = { 'BufReadPre', ipynb_file }, mods = { emsg_silent = true } })
       local bufnr = args.buf
       local metadata = M.open_notebook(ipynb_file, bufnr)
       local stat = vim.uv.fs_stat(ipynb_file)
@@ -77,6 +84,10 @@ M.setup = function(opts)
         desc = 'Convert to native .ipynb json format through jupytext on writing',
         group = buf_augroup,
         callback = function(bufargs)
+          vim.cmd.doautocmd({
+            args = { 'BufWritePre', bufargs.file },
+            mods = { emsg_silent = true },
+          })
           local format = M.get_option('format')
           if (format ~= 'ipynb') and (bufargs.file:sub(-6) == '.ipynb') then
             M.write_notebook(bufargs.file, metadata, bufnr)
@@ -86,11 +97,15 @@ M.setup = function(opts)
               vim.api.nvim_set_option_value('modified', false, { buf = bufnr })
             end
           end
+          vim.cmd.doautocmd({
+            args = { 'BufWritePost', bufargs.file },
+            mods = { emsg_silent = true },
+          })
         end,
       })
 
       if stat and M.get_option('autosync') and M.is_paired(metadata) then
-        vim.api.nvim_buf_set_option(bufnr, 'autoread', true)
+        vim.api.nvim_set_option_value('autoread', true, { buf = bufnr })
         -- We need autoread to be true, because every save will trigger an
         -- update event from the `.ipynb` file being rewritten in the
         -- background.
@@ -103,6 +118,8 @@ M.setup = function(opts)
           end,
         })
       end
+
+      vim.cmd.doautocmd({ args = { 'BufReadPost', ipynb_file }, mods = { emsg_silent = true } })
     end,
   })
 
@@ -146,6 +163,112 @@ M.setup = function(opts)
       end,
     })
   end
+
+  if M.get_option('handle_url_schemes') then
+    -- autocommands for URL ipynb files (e.g., 'fugitive://.../*.ipynb')
+    -- These assume that some other plugin handles BufReadCmd and BufWriteCmd,
+    -- and we do the jupytext conversion purely within the buffer with
+    -- `BufReadPost`, `BufWritePre`, and `BufWritePost`.
+    vim.api.nvim_create_autocmd('BufReadPost', {
+
+      pattern = '*://**/*.ipynb',
+      group = augroup,
+
+      callback = function(args)
+        local bufnr = args.buf
+        local url = args.file
+        local json_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+        local metadata = M.get_metadata(json_lines)
+        local tempdir = vim.fn.tempname()
+        vim.fn.mkdir(tempdir)
+        local basename = url:match('([^/]+)%.%w+$')
+        local temp_ipynb_file = tempdir .. '/' .. basename .. '.ipynb'
+        local format = M.get_option('format')
+        if type(format) == 'function' then
+          format = format(url, metadata)
+        end
+        local paired_formats = M.is_paired(metadata)
+
+        if (format ~= 'ipynb') and M.write_buffer(temp_ipynb_file, bufnr) then
+          local modified = vim.api.nvim_get_option_value('modified', { buf = bufnr })
+          local jupytext = M.get_option('jupytext')
+          local cmd =
+            { jupytext, '--from', 'ipynb', '--to', format, '--output', '-', temp_ipynb_file }
+          local proc = vim.system(cmd, { text = true }):wait()
+          if proc.code == 0 then
+            local text = proc.stdout:gsub('\n$', '') -- strip trailing newline
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, vim.split(text, '\n'))
+          else
+            vim.notify(proc.stderr, vim.log.levels.ERROR)
+          end
+          local filetype = M.get_option('filetype')
+          if type(filetype) == 'function' then
+            filetype = filetype(url, format, metadata)
+          end
+          vim.api.nvim_set_option_value('filetype', filetype, { buf = bufnr })
+          vim.api.nvim_set_option_value('modified', modified, { buf = bufnr })
+          print('"' .. url .. '" via jupytext with format: ' .. format)
+        end
+        vim.b.jupytext_autosync = false
+        vim.b.jupytext_async_write = false
+
+        local buf_augroup = 'JupytextPlugin' .. bufnr
+        vim.api.nvim_create_augroup(buf_augroup, { clear = true })
+
+        -- convert the buffer back to json before writing
+        vim.api.nvim_create_autocmd('BufWritePre', {
+          group = buf_augroup,
+          buffer = bufnr,
+          callback = function()
+            local modified = vim.api.nvim_get_option_value('modified', { buf = bufnr })
+            local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+            local yaml_lines = M.get_yaml_lines(lines)
+            local yaml_data = M.parse_yaml(yaml_lines)
+            local extension = yaml_data.jupyter.jupytext.text_representation.extension
+            local tempfile = tempdir .. '/' .. basename .. '.buffer'
+            M.write_buffer(tempfile, lines) -- to recover buffer in BufWritePost
+            local temp_plain_file = tempdir .. '/' .. basename .. extension
+            M.write_buffer(temp_plain_file, lines)
+            local jupytext = M.get_option('jupytext')
+            local cmd = {
+              jupytext,
+              '--to',
+              'ipynb',
+              '--output',
+              temp_ipynb_file,
+              '--update',
+              temp_plain_file,
+            }
+            local proc = vim.system(cmd):wait()
+            if proc.code == 0 then
+              M.sync(temp_ipynb_file, false, paired_formats)
+              json_lines = M.read_file(temp_ipynb_file, true)
+              vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, json_lines)
+              vim.api.nvim_set_option_value('modified', modified, { buf = bufnr })
+              -- Resetting the '[ '] markers is necessary for Fugitive
+              vim.api.nvim_buf_set_mark(bufnr, '[', 1, 0, {})
+              vim.api.nvim_buf_set_mark(bufnr, ']', #json_lines, 0, {})
+            else
+              vim.notify(proc.stderr, vim.log.levels.ERROR)
+            end
+          end,
+        })
+
+        -- convert the buffer back to plain text after writing
+        vim.api.nvim_create_autocmd('BufWritePost', {
+          group = buf_augroup,
+          buffer = bufnr,
+          callback = function()
+            local modified = vim.api.nvim_get_option_value('modified', { buf = bufnr })
+            local tempfile = tempdir .. '/' .. basename .. '.buffer'
+            local lines = M.read_file(tempfile, true)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+            vim.api.nvim_set_option_value('modified', modified, { buf = bufnr })
+          end,
+        })
+      end,
+    })
+  end
 end
 
 function M.get_option(name)
@@ -155,7 +278,11 @@ function M.get_option(name)
   elseif vim.g[name] ~= nil then
     return vim.g[var_name]
   else
-    return M.opts[name]
+    local value = M.opts[name]
+    if value == nil then
+      vim.notify('Invalid option for jupytext.nvim: ' .. name, vim.log.levels.ERROR)
+    end
+    return value
   end
 end
 
@@ -243,6 +370,7 @@ end
 
 -- Write buffer to .ipynb file via jupytext conversion
 function M.write_notebook(ipynb_file, metadata, bufnr)
+  bufnr = bufnr or 0 -- current buffer, by default
   local buf_file = vim.uv.fs_realpath(vim.api.nvim_buf_get_name(bufnr))
   local write_in_place = (vim.uv.fs_realpath(ipynb_file) == buf_file)
   local buf_mtime = vim.b.mtime
@@ -262,7 +390,6 @@ function M.write_notebook(ipynb_file, metadata, bufnr)
   local target_is_new = not (stat and stat.type == 'file')
   local has_cpo_plus = vim.o.cpoptions:find('%+') ~= nil
   metadata = metadata or {}
-  bufnr = bufnr or 0 -- current buffer, by default
   local update = M.get_option('update')
   local via_tempfile = update
   local autosync = M.get_option('autosync')
@@ -328,21 +455,27 @@ function M.write_notebook(ipynb_file, metadata, bufnr)
   end
 end
 
--- Write buffer to file "as-is"
-function M.write_buffer(file, bufnr)
-  bufnr = bufnr or 0 -- current buffer, by default
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+-- Write buffer or given lines to file "as-is"
+function M.write_buffer(file, bufnr_or_lines)
+  local success = false
+  local lines = {}
+  if type(bufnr_or_lines) == 'table' then
+    lines = bufnr_or_lines
+  else
+    local bufnr = bufnr_or_lines or 0 -- current buffer, by default
+    lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  end
   local fh = io.open(file, 'w')
   if fh then
     for _, line in ipairs(lines) do
       fh:write(line, '\n')
     end
     fh:close()
-    return true
+    success = true
   else
     error('Failed to open file for writing')
-    return false
   end
+  return success
 end
 
 function M._file_exists(path)
@@ -447,6 +580,7 @@ end
 function M.parse_yaml(lines)
   local result_table = {}
   local stack = {}
+  local indent_stack = {} -- Array of ints (spaces per indent level)
   local current_indent = ''
 
   for _, line in ipairs(lines) do
@@ -454,7 +588,14 @@ function M.parse_yaml(lines)
     local trimmed_line = line:match('^%s*(.-)%s*$')
 
     if #leading_spaces < #current_indent then
-      table.remove(stack)
+      local delta = #current_indent - #leading_spaces
+      while (delta > 0) and (#indent_stack > 0) do
+        delta = delta - indent_stack[#indent_stack]
+        table.remove(indent_stack)
+        table.remove(stack)
+      end
+    elseif #leading_spaces > #current_indent then
+      table.insert(indent_stack, #leading_spaces - #current_indent)
     end
     current_indent = leading_spaces
     if #trimmed_line > 0 then
@@ -462,7 +603,7 @@ function M.parse_yaml(lines)
         local sub_table_name = trimmed_line:sub(1, -2)
         table.insert(stack, sub_table_name)
       else
-        local key, value = trimmed_line:match('^(%S+):%s*(.+)$')
+        local key, value = trimmed_line:match('^(.+):%s*(.+)$')
         if value:sub(1, 1) == "'" and value:sub(-1) == "'" then
           value = value:sub(2, -2)
         end

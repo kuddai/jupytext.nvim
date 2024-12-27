@@ -9,7 +9,8 @@ Table of Contents                                 *jupytext-table-of-contents*
 4. Options                                                  |jupytext-options|
 5. Usage                                                      |jupytext-usage|
 6. Paired Files                                        |jupytext-paired-files|
-7. History                                                  |jupytext-history|
+7. Compatibility                                      |jupytext-compatibility|
+8. History                                                  |jupytext-history|
 
 ==============================================================================
 1. jupytext.nvim                                      *jupytext-jupytext.nvim*
@@ -75,6 +76,7 @@ The default options are:
       new_template = require("jupytext").default_new_template(),
       sync_patterns = { '*.md', '*.py', '*.jl', '*.R', '*.Rmd', '*.qmd' },
       autosync = true,
+      handle_url_schemes = true,
     }
 <
 
@@ -168,7 +170,7 @@ automatically if `autosync=true`, irrespective of `sync_pattern`.
 
 `autosync`                                                 *jupytext-autosync*
 
-If true (recommended), enable automatic synchronization for files paired via
+If `true` (recommended), enable automatic synchronization for files paired via
 the Jupytext plugin (the plugin for Jupyter Lab). For `.ipynb` files, this
 checks if the notebook is paired to any plain text files. If so, it will call
 `jupytext --sync` before loading the file and after saving it, to ensure all
@@ -177,18 +179,34 @@ files are being kept in sync. It will also periodically check whether the
 |`autoread`| option for the current buffer.
 
 
+`handle_url_schemes`                             *jupytext-handle_url_schemes*
+
+If `true`, set up |`BufReadPost`|, |`BufWritePre`|, and |`BufWritePost`|
+handlers for buffers with a URL scheme name (like
+`oil-ssh://hostname/path/to/file.ipynb`). This converts the buffer content
+from and to the `ipynb` representation under the assumption that some other
+plugin is responsible for reading and writing the buffer. See
+|jupytext-compatibility| for details.
+
+
 ==============================================================================
 5. Usage                                                      *jupytext-usage*
 
 When opening an `.ipynb` file, this plugin will inject itself into the loading
-process and convert the `json` data in the file to a plain text format by
-piping it through `jupytext` using the `format` set in |jupytext-options|.
+process (on |`BufReadCmd`|) and convert the `json` data in the file to a plain
+text format by piping it through `jupytext` using the `format` set in
+|jupytext-options|.
 
-On saving, the original `.ipynb` file will be updated by piping the content of
-the current buffer back into `jupytext`. With the default `update` setting,
-this will keep existing outputs and metadata in the notebook. When saving the
-buffer to a new file, it will be converted if the filename has an `.ipynb`
-extension. Otherwise, the buffer will be written unchanged.
+On saving (on |`BufWriteCmd`|), the original `.ipynb` file will be updated by
+piping the content of the current buffer back into `jupytext`. With the
+default `update` setting, this will keep existing outputs and metadata in the
+notebook. When saving the buffer to a new file, it will be converted if the
+filename has an `.ipynb` extension. Otherwise, the buffer will be written
+unchanged.
+
+Files that have a URL scheme in their name are converted in a less efficient
+manner based on their buffer content, if `handle_url_schemes = true`. See
+|jupytext-compatibility| for details.
 
 
 ==============================================================================
@@ -212,13 +230,45 @@ being edited. Saving a paired file while `autosync = false` will unpair it.
 
 
 ==============================================================================
-7. History                                                  *jupytext-history*
+7. Compatibility                                      *jupytext-compatibility*
+
+The `jupytext.nvim` plugin has some compatibility with other plugins that read
+and write files via a URL scheme. For example:
+
+- vim-fugitive <https://github.com/tpope/vim-fugitive> uses `fugitive://` URL
+  schemes internally. With `handle_url_schemes = true` in |jupytext-options|,
+  it should be possible to, e.g., use `:Gvdiffsplit` and stage changes for an
+  `.ipynb` file using a plain text representation.
+- oil.nvim <https://github.com/stevearc/oil.nvim> uses an `oil-ssh://` URL
+  scheme for editing files over SSH
+  <https://github.com/stevearc/oil.nvim?tab=readme-ov-file#ssh>. The
+  `jupytext.nvim` plugin should be able to translate the buffer to and from
+  plain text transparently.
+
+This relies on the plugins’ implementation of `BufReadCmd` and `BufWriteCmd`
+handlers that explicitly trigger `BufReadPost`, `BufWritePre` and
+`BufWritePost` autocommands, as the above plugins do.
+
+For local `.ipynb` files where `jupytext.nvim` handles `BufReadCmd` and
+`BufWriteCmd`, it will likewise trigger `BufReadPost`, `BufWritePre` and
+`BufWritePost` autocommands. This allows for further customization and
+potential integration with other plugins.
+
+In general, compatibility with other plugins should be considered
+experimental.
+
+
+==============================================================================
+8. History                                                  *jupytext-history*
 
 
 Unreleased ~
 
 - Added: ability to create new `.ipynb` files. These are created from a
   template file that can be configured via the `new_template` option.
+- Added: ability to translate buffer content for files with URL schemes
+  (`handle_url_schemes` option). This enables, e.g., compatibility with
+  vim-fugitive <https://github.com/tpope/vim-fugitive>.
 
 
 v0.1.0 (2024-12-18) ~

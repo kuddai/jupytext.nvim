@@ -61,6 +61,7 @@ opts = {
   new_template = require("jupytext").default_new_template(),
   sync_patterns = { '*.md', '*.py', '*.jl', '*.R', '*.Rmd', '*.qmd' },
   autosync = true,
+  handle_url_schemes = true,
 }
 ```
 
@@ -111,15 +112,21 @@ Note that the `sync_pattern` only determines for which plain text files the appr
 
 #### `autosync`
 
-If true (recommended), enable automatic synchronization for files paired via the Jupytext plugin (the plugin for Jupyter Lab). For `.ipynb` files, this checks if the notebook is paired to any plain text files. If so, it will call `jupytext --sync` before loading the file and after saving it, to ensure all files are being kept in sync. It will also periodically check whether the `.ipynb` file has changed on disk and reload it if necessary, setting the [`autoread`](https://neovim.io/doc/user/options.html#'autoread') option for the current buffer.
+If `true` (recommended), enable automatic synchronization for files paired via the Jupytext plugin (the plugin for Jupyter Lab). For `.ipynb` files, this checks if the notebook is paired to any plain text files. If so, it will call `jupytext --sync` before loading the file and after saving it, to ensure all files are being kept in sync. It will also periodically check whether the `.ipynb` file has changed on disk and reload it if necessary, setting the [`autoread`](https://neovim.io/doc/user/options.html#'autoread') option for the current buffer.
+
+#### `handle_url_schemes`
+
+If `true`, set up [`BufReadPost`](https://neovim.io/doc/user/autocmd.html#BufReadPost), [`BufWritePre`](https://neovim.io/doc/user/autocmd.html#BufWritePre), and [`BufWritePost`](https://neovim.io/doc/user/autocmd.html#BufWritePost) handlers for buffers with a URL scheme name (like `oil-ssh://hostname/path/to/file.ipynb`). This converts the buffer content from and to the `ipynb` representation under the assumption that some other plugin is responsible for reading and writing the buffer. See [Compatibility](#compatibility) for details.
 
 
 Usage
 =====
 
-When opening an `.ipynb` file, this plugin will inject itself into the loading process and convert the `json` data in the file to a plain text format by piping it through `jupytext` using the `format` set in [Options](#options).
+When opening an `.ipynb` file, this plugin will inject itself into the loading process (on [`BufReadCmd`](https://neovim.io/doc/user/autocmd.html#BufReadCmd)) and convert the `json` data in the file to a plain text format by piping it through `jupytext` using the `format` set in [Options](#options).
 
-On saving, the original `.ipynb` file will be updated by piping the content of the current buffer back into `jupytext`. With the default `update` setting, this will keep existing outputs and metadata in the notebook. When saving the buffer to a new file, it will be converted if the filename has an `.ipynb` extension. Otherwise, the buffer will be written unchanged.
+On saving (on [`BufWriteCmd`](https://neovim.io/doc/user/autocmd.html#BufWriteCmd)), the original `.ipynb` file will be updated by piping the content of the current buffer back into `jupytext`. With the default `update` setting, this will keep existing outputs and metadata in the notebook. When saving the buffer to a new file, it will be converted if the filename has an `.ipynb` extension. Otherwise, the buffer will be written unchanged.
+
+Files that have a URL scheme in their name are converted in a less efficient manner based on their buffer content, if `handle_url_schemes = true`. See [Compatibility](#compatibility) for details.
 
 
 Paired Files
@@ -129,10 +136,28 @@ While the Jupytext project provides the command line utility `jupytext` used by 
 
 The intent of the original `jupytext.vim` plugin was to edit `.ipynb` files _not_ paired in such a way, and not loaded in an active Jupyter session. With this rewritten version of the plugin, `jupytext.nvim` now supports editing `.ipynb` files with Neovim if they are paired in Jupyter, and, at least in principle, even while the notebooks are actively loaded in a running Jupyter server. For this to work, the `autosync` option must be set to `true` (default, see [Options](#options)). This automatically handles the update of any paired files and watches for modifications of the file on disk while it is being edited. Saving a paired file while `autosync = false` will unpair it.
 
-
 <!-- panvimdoc-ignore-start -->
 
 Even though editing files that are also actively loaded in Jupyter _works_, it might still be preferable to close the file in Jupyter first. The support in Jupyter for detecting external changes is not quite as good. You will have to manually reload files after saving them in Neovim. In the future, it might be possible to [combine the Jupytext plugin for Jupyter with its real-time-collaboration plugin](https://github.com/jupyterlab/jupyter-collaboration/issues/214), which would alleviate this concern.
+
+<!-- panvimdoc-ignore-end -->
+
+
+Compatibility
+=============
+
+The `jupytext.nvim` plugin has some compatibility with other plugins that read and write files via a URL scheme. For example:
+
+- [vim-fugitive](https://github.com/tpope/vim-fugitive) uses `fugitive://` URL schemes internally. With `handle_url_schemes = true` in [Options](#options), it should be possible to, e.g., use `:Gvdiffsplit` and stage changes for an `.ipynb` file using a plain text representation.
+- [oil.nvim](https://github.com/stevearc/oil.nvim) uses an `oil-ssh://` URL scheme for [editing files over SSH](https://github.com/stevearc/oil.nvim?tab=readme-ov-file#ssh). The `jupytext.nvim` plugin should be able to translate the buffer to and from plain text transparently.
+
+This relies on the plugins' implementation of `BufReadCmd` and `BufWriteCmd` handlers that explicitly trigger `BufReadPost`, `BufWritePre` and `BufWritePost` autocommands, as the above plugins do.
+
+For local `.ipynb` files where `jupytext.nvim` handles `BufReadCmd` and `BufWriteCmd`, it will likewise trigger `BufReadPost`, `BufWritePre` and `BufWritePost` autocommands. This allows for further customization and potential integration with other plugins.
+
+In general, compatibility with other plugins should be considered experimental.
+
+<!-- panvimdoc-ignore-start -->
 
 
 Development
@@ -153,6 +178,8 @@ GitHub Actions will check that the `README` and the Vim help file are in sync.
 
 This plugin uses the [`plenary.nvim` test framework](https://github.com/nvim-lua/plenary.nvim/blob/master/TESTS_README.md). Tests are organized in `tests/*_spec.lua` files, and can be run by executing the `./run_tests.sh` script. This also happens automatically on GitHub Actions with each push.
 
+To run just a single test file during development, it may be helpful to use the `:PlenaryBustedFile %` command from inside the Neovim session editing the test file.
+
 <!-- panvimdoc-ignore-end -->
 
 
@@ -162,6 +189,7 @@ History
 ### Unreleased
 
 * Added: ability to create new `.ipynb` files. These are created from a template file that can be configured via the `new_template` option.
+* Added: ability to translate buffer content for files with URL schemes (`handle_url_schemes` option). This enables, e.g., compatibility with [vim-fugitive](https://github.com/tpope/vim-fugitive).
 
 ### v0.1.0 (2024-12-18)
 
