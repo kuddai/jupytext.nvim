@@ -37,7 +37,7 @@ Use the following plugin specification:
 ```lua
 {
     'goerz/jupytext.nvim',
-    version = '0.1',
+    version = '0.2.0',
     opts = {},  -- see Options
 }
 ```
@@ -102,13 +102,11 @@ The default function used for this setting uses `"markdown"` for markdown format
 
 When editing a new (non-existing) `.ipynb` file, a `template.ipynb` file to load into the buffer. The default built-in template is for a Python notebook. While it is possible to manually edit the YAML header to change the kernel and/or language, if you primarily work with non-Python notebooks, it might be useful to set a custom template.
 
-
 #### `sync_pattern`
 
 Patterns for plain text files that should be recognized as "syncable". If `autosync=true` (see below), and if, for a file matching the patterns, there also exists a file with an `.ipynb` extension, autocommands will be set up for `jupyter --sync` to be called before loading the file and after saving the file. This also periodically calls the `:checktime` function in the background to determine whether the file has changed on disk (by a running Jupyter server, presumably), and reloads it when appropriate.
 
 Note that the `sync_pattern` only determines for which plain text files the appropriate autocommands will be set up in Neovim. The setting is independent of which Jupytext pairings are active, which is in the metadata for the `.ipynb` files. All linked files will automatically be kept in sync. Likewise, when editing `.ipynb` files directly, _all_ linked files will be kept in sync automatically if `autosync=true`, irrespective of `sync_pattern`.
-
 
 #### `autosync`
 
@@ -186,7 +184,7 @@ To run just a single test file during development, it may be helpful to use the 
 History
 =======
 
-### Unreleased
+### v0.2.0 (2024-12-28)
 
 * Added: ability to create new `.ipynb` files. These are created from a template file that can be configured via the `new_template` option.
 * Added: ability to translate buffer content for files with URL schemes (`handle_url_schemes` option). This enables, e.g., compatibility with [vim-fugitive](https://github.com/tpope/vim-fugitive).

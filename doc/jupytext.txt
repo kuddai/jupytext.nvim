@@ -48,7 +48,7 @@ Use the following plugin specification:
 >lua
     {
         'goerz/jupytext.nvim',
-        version = '0.1',
+        version = '0.2.0',
         opts = {},  -- see Options
     }
 <
@@ -262,7 +262,7 @@ experimental.
 8. History                                                  *jupytext-history*
 
 
-Unreleased ~
+v0.2.0 (2024-12-28) ~
 
 - Added: ability to create new `.ipynb` files. These are created from a
   template file that can be configured via the `new_template` option.
