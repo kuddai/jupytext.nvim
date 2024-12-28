@@ -155,6 +155,21 @@ For local `.ipynb` files where `jupytext.nvim` handles `BufReadCmd` and `BufWrit
 
 In general, compatibility with other plugins should be considered experimental.
 
+The `jupytext.nvim` plugin is not compatible with [`gitsigns.nvim`](https://github.com/lewis6991/gitsigns.nvim). It is best to deactivate `gitsigns` for `.ipynb` files via the `on_attach` callback in that plugin's `opts` (see `:help gitsigns-config-on_attach`):
+
+```lua
+require('gitsigns').setup{
+  …
+  on_attach = function(bufnr)
+    if vim.api.nvim_buf_get_name(bufnr):match('%.ipynb$') then
+      -- Do not attach for .ipynb file, since these are converted
+      -- with jupytext.nvim
+      return false
+    end
+  end,
+}
+```
+
 <!-- panvimdoc-ignore-start -->
 
 
