@@ -148,7 +148,6 @@ M.setup = function(opts)
         local ipynb_file = args.file:match('^(.+)%.%w+$') .. '.ipynb'
         if M._file_exists(ipynb_file) then
           M.sync(ipynb_file)
-          print('Synced with "' .. ipynb_file .. '" via jupytext')
         end
       end,
     })
